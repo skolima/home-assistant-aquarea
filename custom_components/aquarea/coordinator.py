@@ -165,6 +165,27 @@ class AquareaDataUpdateCoordinator(DataUpdateCoordinator[aioaquarea.Device]):
             days.append(today)
         return days
 
+    async def _async_get_day_consumption(
+        self, day: date
+    ) -> list[aioaquarea.Consumption] | None:
+        """Fetch one day's hourly consumption, logging in again once if the token expired.
+
+        A second authentication failure propagates, so the coordinator's
+        handler turns invalid credentials into a reauth flow.
+        """
+        try:
+            return await self._client.get_device_consumption(
+                self._device.long_id, DateType.DAY, day.strftime("%Y%m%d")
+            )
+        except aioaquarea.AuthenticationError:
+            _LOGGER.debug(
+                "Token expired during the hourly consumption fetch, logging in"
+            )
+            await self._client.login()
+            return await self._client.get_device_consumption(
+                self._device.long_id, DateType.DAY, day.strftime("%Y%m%d")
+            )
+
     async def _async_fetch_hourly_consumption(self, now: datetime) -> None:
         """Fetch the hourly consumption of the days that are due.
 
@@ -178,9 +199,9 @@ class AquareaDataUpdateCoordinator(DataUpdateCoordinator[aioaquarea.Device]):
         for day in days:
             self._day_requested_at[day] = now
             try:
-                records = await self._client.get_device_consumption(
-                    self._device.long_id, DateType.DAY, day.strftime("%Y%m%d")
-                )
+                records = await self._async_get_day_consumption(day)
+            except aioaquarea.AuthenticationError:
+                raise
             except Exception as ex:  # noqa: BLE001 - deliberate: warn and keep the cached hourly data
                 _LOGGER.warning(
                     "Failed to fetch the hourly consumption of %s: %s", day, ex
